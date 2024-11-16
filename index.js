@@ -40,6 +40,17 @@ const sendToConsumers = (data) => {
 const app = express();
 app.use(bodyParser.json()); // Para tratar JSON recebido no corpo da requisição
 
+// Middleware para permitir CORS
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*"); // Permite requisições de qualquer origem
+  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE"); // Permite os métodos
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization"); // Permite cabeçalhos personalizados
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200); // Responde rápido a requisições OPTIONS (preflight)
+  }
+  next();
+});
+
 // Endpoint que recebe dados via POST e os envia aos consumidores WebSocket
 app.post("/send-data", (req, res) => {
   const data = req.body;
@@ -62,5 +73,5 @@ const server = http.createServer(app);
 
 // Inicia o servidor HTTP
 server.listen(3000, () => {
-  console.log("Servidor HTTPS rodando na porta 3000");
+  console.log("Servidor HTTP rodando na porta 3000");
 });
