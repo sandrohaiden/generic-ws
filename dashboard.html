@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>WebSocket Dashboard</title>
+		<style>
+			body {
+				font-family: Arial, sans-serif;
+				background-color: #f4f4f4;
+				margin: 0;
+				padding: 20px;
+			}
+			.container {
+				width: 80%;
+				margin: 0 auto;
+				background: #fff;
+				padding: 20px;
+				border-radius: 8px;
+				box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+			}
+			.data-block {
+				margin-bottom: 20px;
+			}
+			.data-block h3 {
+				color: #333;
+			}
+			.data-block pre {
+				background: #e8e8e8;
+				padding: 10px;
+				border-radius: 4px;
+				overflow-x: auto;
+			}
+		</style>
+		<script src="https://cdn.jsdelivr.net/gh/mickelsonmichael/js-snackbar@master/dist/js-snackbar.min.js"></script>
+		<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/mickelsonmichael/js-snackbar@master/dist/js-snackbar.min.css">
+	</head>
+	<body>
+		<div class="container">
+			<h1>WebSocket JSON Dashboard</h1>
+			<div id="json-container"></div>
+		</div>
+
+		<script>
+			// Função para criar e atualizar os blocos de dados
+			let globalSnackTimeout = 20000
+			function updateDashboard(data) {
+				const container = document.getElementById('json-container')
+				container.innerHTML = '' // Limpa o conteúdo anterior
+
+				// Itera sobre os campos do JSON
+				Object.keys(data).forEach((key) => {
+					const block = document.createElement('div')
+					block.className = 'data-block'
+
+					const title = document.createElement('h3')
+					title.innerText = key
+					block.appendChild(title)
+
+					const value = document.createElement('pre')
+					value.innerText = JSON.stringify(data[key], null, 2) // Formatação do JSON
+					block.appendChild(value)
+
+					container.appendChild(block)
+				})
+			}
+
+			// Conectando ao WebSocket
+			const socket = new WebSocket('wss://ws.debugon.xyz')
+
+			// Quando a conexão for estabelecida
+			socket.onopen = function () {
+				console.log('WebSocket connected')
+				const data = {
+					type: 'consumer' // Identifica que este dispositivo é o consumidor
+				}
+				socket.send(JSON.stringify(data))
+			}
+
+			// Quando uma mensagem é recebida
+			socket.onmessage = function (event) {
+				try {
+					const {
+						payload: { meta, alertMeta, ...rest }
+					} = JSON.parse(event.data) // Faz parse do JSON recebido
+					
+					!alertMeta && updateDashboard(rest) // Atualiza o dashboard
+					if(alertMeta) {
+						const isnan = isNaN(alertMeta.confiability)
+						const confiability = isnan ? alertMeta.confiability : Number(alertMeta.confiability).toFixed(2)
+						console.log(alertMeta)
+						window.SnackBar({
+							message: `Pulo detectado | Confiabilidade: ${confiability}`,
+							status: 'danger',
+							position: 'tc',
+							icon: 'danger',
+							timeout: globalSnackTimeout
+						})
+					}
+				} catch (error) {
+					console.error('Error parsing JSON:', error)
+				}
+			}
+
+			// Quando ocorre um erro
+			socket.onerror = function (error) {
+				console.error('WebSocket error:', error)
+			}
+
+			// Quando a conexão for fechada
+			socket.onclose = function () {
+				console.log('WebSocket connection closed')
+			}
+		</script>
+	</body>
+</html>

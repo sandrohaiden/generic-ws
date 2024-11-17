@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="pt-BR">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Visualização de Sensores</title>
+		<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+		<style>
+			body {
+				font-family: Arial, sans-serif;
+				text-align: center;
+				padding: 20px;
+			}
+			canvas {
+				width: 100%; /* Ajusta para ocupar toda a largura disponível */
+				height: 500px; /* Define uma altura maior para o gráfico */
+				max-width: 90%; /* Limita a largura máxima */
+				margin: 20px auto;
+			}
+			form {
+				margin: 20px 0;
+			}
+			input,
+			button {
+				margin: 5px;
+				padding: 10px;
+				font-size: 16px;
+			}
+			#app-content {
+				display: none; /* Inicialmente oculto */
+			}
+		</style>
+	</head>
+	<body>
+		<h1>Visualização de Sensores</h1>
+
+		<div id="start-container">
+			<form id="startForm">
+				<input
+					type="number"
+					id="frequency"
+					placeholder="Frequência (hz)"
+					value="10"
+					required
+				/>
+				<input
+					type="number"
+					id="time"
+					placeholder="Tempo (ms)"
+					value="2500"
+					required
+				/>
+				<input
+					type="number"
+					id="wait"
+					placeholder="Espera (ms)"
+					value="3000"
+					required
+				/>
+				<button type="button" id="startButton">Iniciar</button>
+			</form>
+		</div>
+
+		<div id="app-content">
+			<form id="dataForm">
+				<input type="text" id="label" placeholder="Label" required />
+				<input
+					type="text"
+					id="userSource"
+					placeholder="Usuário Fonte"
+					required
+				/>
+				<input type="text" id="description" placeholder="Descrição" required />
+				<button type="button" id="saveButton">Salvar em CSV</button>
+			</form>
+			<div id="status">Aguardando retorno...</div>
+			<canvas id="sensorChart"></canvas>
+		</div>
+
+		<script>
+			const wsServerUrl = 'wss://ws.debugon.xyz'
+			const postUrl = 'https://machine.debugon.xyz/send-data'
+			const startButton = document.getElementById('startButton')
+			const saveButton = document.getElementById('saveButton')
+			const startContainer = document.getElementById('start-container')
+			const appContent = document.getElementById('app-content')
+			const frequencyInput = document.getElementById('frequency')
+			const timeInput = document.getElementById('time')
+			const waitInput = document.getElementById('wait')
+			const labelInput = document.getElementById('label')
+			const userSourceInput = document.getElementById('userSource')
+			const descriptionInput = document.getElementById('description')
+			const status = document.getElementById('status')
+			const sensorChartCtx = document
+				.getElementById('sensorChart')
+				.getContext('2d')
+
+			let ws
+			let chart
+			let dataBuffer = []
+
+			let frequency = 0
+			let time = 0
+			let wait = 0
+
+			// Configuração inicial do gráfico
+			function setupChart() {
+				chart = new Chart(sensorChartCtx, {
+					type: 'line',
+					data: {
+						labels: [], // Labels do eixo X
+						datasets: [
+							{
+								label: 'Acelerômetro X',
+								borderColor: 'red',
+								data: [],
+								fill: false,
+								lineTension: 0.3
+							},
+							{
+								label: 'Acelerômetro Y',
+								borderColor: 'blue',
+								data: [],
+								fill: false,
+								lineTension: 0.3
+							},
+							{
+								label: 'Acelerômetro Z',
+								borderColor: 'green',
+								data: [],
+								fill: false,
+								lineTension: 0.3
+							},
+							{
+								label: 'Giroscópio X',
+								borderColor: 'orange',
+								data: [],
+								fill: false,
+								lineTension: 0.3
+							},
+							{
+								label: 'Giroscópio Y',
+								borderColor: 'purple',
+								data: [],
+								fill: false,
+								lineTension: 0.3
+							},
+							{
+								label: 'Giroscópio Z',
+								borderColor: 'brown',
+								data: [],
+								fill: false,
+								lineTension: 0.3
+							}
+						]
+					},
+					options: {
+						responsive: true,
+						animation: false,
+						scales: {
+							x: { title: { display: true, text: 'Amostras (Tempo)' } },
+							y: { title: { display: true, text: 'Valores' } }
+						}
+					}
+				})
+			}
+
+			// Atualiza o gráfico com novos dados
+			function updateChart(data) {
+				data.forEach((item, i) => {
+					chart.data.labels.push(i * 100) // Adiciona o índice ao eixo X
+					chart.data.datasets[0].data.push(item[0]) // Acelerômetro X
+					chart.data.datasets[1].data.push(item[1]) // Acelerômetro Y
+					chart.data.datasets[2].data.push(item[2]) // Acelerômetro Z
+					chart.data.datasets[3].data.push(item[3]) // Giroscópio X
+					chart.data.datasets[4].data.push(item[4]) // Giroscópio Y
+					chart.data.datasets[5].data.push(item[5]) // Giroscópio Z
+				})
+
+				chart.update()
+			}
+
+			// Enviar dados via POST
+			async function sendPostRequest(data) {
+				try {
+					const response = await fetch(postUrl, {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify(data)
+					})
+					if (!response.ok) throw new Error('Erro ao enviar o POST')
+					console.log('POST enviado com sucesso:', data)
+				} catch (error) {
+					console.error('Erro no POST:', error)
+					alert(
+						'Falha ao iniciar a coleta. Verifique os valores e tente novamente.'
+					)
+				}
+			}
+
+			// Iniciar aplicação
+			startButton.addEventListener('click', async () => {
+				frequency = Number(frequencyInput.value)
+				time = Number(timeInput.value)
+				wait = Number(waitInput.value)
+
+				if (!frequency || !time || !wait) {
+					alert('Preencha todos os campos numéricos antes de iniciar.')
+					return
+				}
+
+				const requestData = {
+					request: 'INICIAR_COLETA',
+					frequency,
+					time,
+					wait
+				}
+
+				await sendPostRequest(requestData)
+
+				// Alterna a exibição entre os elementos
+				startContainer.style.display = 'none'
+				appContent.style.display = 'block'
+
+				setupChart()
+				connectWebSocket()
+			})
+
+			function clearPreviousData() {
+				chart.data.labels = [] // Adiciona o índice ao eixo X
+				chart.data.datasets[0].data = [] // Acelerômetro X
+				chart.data.datasets[1].data = [] // Acelerômetro Y
+				chart.data.datasets[2].data = [] // Acelerômetro Z
+				chart.data.datasets[3].data = [] // Giroscópio X
+				chart.data.datasets[4].data = [] // Giroscópio Y
+				chart.data.datasets[5].data = [] // Giroscópio Z
+				chart.update()
+				status.innerHTML = `Aguardando retorno...`
+			}
+
+			// Conectar ao WebSocket
+			function connectWebSocket() {
+				ws = new WebSocket(wsServerUrl)
+
+				ws.onopen = () => {
+					console.log('Conectado ao WebSocket')
+					ws.send(JSON.stringify({ type: 'consumer' }))
+				}
+
+				ws.onmessage = (event) => {
+					const message = JSON.parse(event.data)
+					if (message.payload?.data) {
+						const { data } = message.payload
+						let expectedSize = time / (1000 / frequency)
+						if (data.length > expectedSize)
+							alert(
+								`Retorno maior que o esperado \n Considere reiniciar as aplicações\n Tamanho esperado: ${expectedSize}; Recebido: ${data.length}`
+							)
+						dataBuffer = data
+						status.innerHTML = `Dados Recebidos! ${data.length} linhas`
+						updateChart(data)
+					}
+				}
+
+				ws.onclose = () => {
+					console.log('WebSocket desconectado. Tentando reconectar...')
+					setTimeout(connectWebSocket, 5000)
+				}
+
+				ws.onerror = (error) => console.error('Erro no WebSocket:', error)
+			}
+
+			// Salva os dados em CSV
+			saveButton.addEventListener('click', () => {
+				const label = labelInput.value.trim()
+				const userSource = userSourceInput.value.trim()
+				const description = descriptionInput.value.trim()
+
+				if (!label || !userSource || !description) {
+					alert('Preencha todos os campos antes de salvar.')
+					return
+				}
+
+				const id = Math.random().toString(36).substring(2, 7) // Gera ID com até 5 caracteres
+				const filename = `${label}-${userSource}-${description}-${id}.csv`
+				const csvContent = dataBuffer.map((row) => row.join(',')).join('\n')
+
+				const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+				const url = URL.createObjectURL(blob)
+				const link = document.createElement('a')
+				link.href = url
+				link.download = filename
+				link.click()
+
+				// Após salvar, reinicia o estado inicial
+				appContent.style.display = 'none'
+				startContainer.style.display = 'block'
+				clearPreviousData()
+			})
+		</script>
+	</body>
+</html>

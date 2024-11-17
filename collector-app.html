@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Coleta de Sensores</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        text-align: center;
+        padding: 20px;
+      }
+      #app-content {
+        display: none; /* Esconde o conteúdo inicialmente */
+      }
+      #status {
+        margin: 20px 0;
+        font-size: 18px;
+        color: #333;
+      }
+      #sensor-status,
+      #vibration-status {
+        margin: 10px 0;
+        font-size: 16px;
+        color: #555;
+      }
+      button {
+        margin-top: 20px;
+        padding: 10px 20px;
+        font-size: 16px;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Coleta de Sensores</h1>
+    <button id="startButton">INICIAR</button>
+    <div id="app-content">
+      <p id="status">Aguardando conexão...</p>
+      <p id="sensor-status">Verificando suporte aos sensores...</p>
+      <p id="vibration-status">Verificando suporte à vibração...</p>
+    </div>
+
+    <script>
+      const serverUrl = "wss://ws.debugon.xyz";
+
+      const statusElement = document.getElementById("status");
+      const sensorStatusElement = document.getElementById("sensor-status");
+      const vibrationStatusElement =
+        document.getElementById("vibration-status");
+      const startButton = document.getElementById("startButton");
+      const appContent = document.getElementById("app-content");
+
+      let ws;
+      let dataBuffer = [];
+      let samplingInterval;
+      let motionListener;
+      let lastData = null;
+
+      let audioCtx = null;
+
+      function playAudioPattern(pattern) {
+        // Cria um novo AudioContext se ele não existir ou se estiver fechado
+        if (!audioCtx || audioCtx.state === "closed") {
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+
+        const oscillator = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+
+        oscillator.type = "sine"; // Tipo de onda
+        oscillator.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+
+        let startTime = audioCtx.currentTime;
+        const realPattern = Array.isArray(pattern) ? pattern : [pattern];
+
+        realPattern.forEach((duration, index) => {
+          const isSilent = index % 2 !== 0;
+          if (isSilent) {
+            gainNode.gain.setValueAtTime(0, startTime);
+          } else {
+            gainNode.gain.setValueAtTime(0.5, startTime); // Volume do beep
+            oscillator.frequency.setValueAtTime(440, startTime); // Frequência do beep
+          }
+          startTime += duration / 1000; // Converte ms para segundos
+        });
+
+        oscillator.start(audioCtx.currentTime);
+        oscillator.stop(startTime);
+      }
+
+      function notify(pattern) {
+        if ("vibrate" in navigator) {
+          navigator.vibrate(pattern);
+        } else {
+          playAudioPattern(pattern);
+        }
+      }
+
+      async function enableWakeLock() {
+        try {
+          if ("wakeLock" in navigator) {
+            await navigator.wakeLock.request("screen");
+            console.log("Wake Lock ativado");
+          }
+        } catch (err) {
+          console.error(
+            `Erro ao ativar Wake Lock: ${err.name}, ${err.message}`
+          );
+        }
+      }
+
+      function checkSensorSupport() {
+        const hasDeviceMotion = "ondevicemotion" in window;
+        sensorStatusElement.textContent = hasDeviceMotion
+          ? "Sensores suportados: DeviceMotion disponível. ✅"
+          : "Sensores não suportados neste dispositivo. ❌";
+      }
+
+      function connectWebSocket() {
+        ws = new WebSocket(serverUrl);
+
+        ws.onopen = () => {
+          ws.send(JSON.stringify({ type: "consumer" }));
+          statusElement.textContent = "Conectado ao servidor.";
+        };
+
+        ws.onmessage = (event) => {
+          const { payload } = JSON.parse(event.data);
+
+          if (payload.request === "INICIAR_COLETA") {
+            statusElement.textContent = "Coleta solicitada. Início em breve";
+            notify([200, 80, 200]);
+            const { frequency, time, wait } = payload;
+
+            setTimeout(() => {
+              notify(400);
+              startCollection(frequency, time);
+            }, wait);
+          }
+        };
+
+        ws.onclose = () => {
+          statusElement.textContent = "Desconectado. Tentando reconectar...";
+          setTimeout(connectWebSocket, 5000);
+        };
+      }
+
+      async function requestPermission() {
+        if (
+          typeof DeviceMotionEvent !== "undefined" &&
+          typeof DeviceMotionEvent.requestPermission === "function"
+        ) {
+          const permissionState = await DeviceMotionEvent.requestPermission();
+          if (permissionState !== "granted") {
+            throw new Error("Permissão para uso do DeviceMotion negada.");
+          }
+        }
+      }
+
+      function startCollection(frequency, time) {
+        dataBuffer = [];
+        const intervalMs = 1000 / frequency;
+
+        if ("ondevicemotion" in window) {
+          lastData = null;
+
+          motionListener = (event) => {
+            lastData = {
+              ax: event.accelerationIncludingGravity?.x || 0,
+              ay: event.accelerationIncludingGravity?.y || 0,
+              az: event.accelerationIncludingGravity?.z || 0,
+              gx: event.rotationRate?.alpha || 0,
+              gy: event.rotationRate?.beta || 0,
+              gz: event.rotationRate?.gamma || 0,
+            };
+          };
+
+          window.addEventListener("devicemotion", motionListener);
+		  statusElement.textContent = "Coleta iniciada!";
+
+          samplingInterval = setInterval(() => {
+            if (lastData) {
+              dataBuffer.push([
+                lastData.ax,
+                lastData.ay,
+                lastData.az,
+                lastData.gx,
+                lastData.gy,
+                lastData.gz,
+              ]);
+              lastData = null; // Limpa os dados para evitar duplicatas
+            }
+          }, intervalMs);
+
+          setTimeout(() => {
+            stopCollection();
+          }, time + intervalMs);
+        } else {
+          statusElement.textContent = "Sensores não suportados.";
+        }
+      }
+
+      function stopCollection() {
+        clearInterval(samplingInterval);
+        window.removeEventListener("devicemotion", motionListener);
+
+        notify([300, 200, 300]);
+
+        statusElement.textContent = "Finalizada!";
+
+        const payload = { type: "data", payload: dataBuffer };
+        ws.send(JSON.stringify(payload));
+
+        fetch("https://machine.debugon.xyz/send-data", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ data: dataBuffer }),
+        })
+          .then((response) => {
+            if (response.ok) {
+              statusElement.textContent =
+                "Coleta finalizada e dados enviados com sucesso!";
+            } else {
+              statusElement.textContent =
+                "Erro ao enviar os dados ao servidor REST.";
+            }
+          })
+          .catch(() => {
+            statusElement.textContent = "Erro ao conectar-se ao servidor REST.";
+          });
+      }
+
+      startButton.addEventListener("click", async () => {
+        try {
+          await requestPermission();
+          notify(300);
+          await enableWakeLock();
+          startButton.style.display = "none";
+          appContent.style.display = "block";
+          checkSensorSupport();
+          connectWebSocket();
+        } catch (error) {
+          statusElement.textContent =
+            "Erro ao obter permissão: " + error.message;
+        }
+      });
+    </script>
+  </body>
+</html>
